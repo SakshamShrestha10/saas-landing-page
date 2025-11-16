@@ -1,0 +1,75 @@
+name: Build and Deploy app
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    # Checkout application repo
+    - name: Checkout app repository
+      uses: actions/checkout@v3
+
+    # Capture short commit SHA
+    - name: Set commit SHA
+      id: vars
+      run: echo "SHORT_SHA=$(echo ${GITHUB_SHA} | cut -c1-7)" >> $GITHUB_OUTPUT
+
+    # Log in to DockerHub
+    - name: Log in to DockerHub
+      run: |
+        echo "${{ secrets.DOCKERHUB_PASSWORD }}" | docker login --username "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+
+    # Build and push image
+    - name: Build and Push Docker Image
+      run: |
+        SHORT_SHA=${{ steps.vars.outputs.SHORT_SHA }}
+
+        docker build -t bankapp:${SHORT_SHA} -f Dockerfile .
+        docker tag bankapp:${SHORT_SHA} ${{ secrets.DOCKERHUB_USERNAME }}/bankapp:${SHORT_SHA}
+
+        docker push ${{ secrets.DOCKERHUB_USERNAME }}/bankapp:${SHORT_SHA}
+
+        echo "IMAGE_TAG=${SHORT_SHA}" >> $GITHUB_ENV
+
+
+    # ----------------------------------------------------------
+    # Checkout Helm GitOps repo
+    # ----------------------------------------------------------
+    - name: Checkout Helm repository
+      uses: actions/checkout@v3
+      with:
+        repository: SakshamShrestha10/helm
+        token: ${{ secrets.GH_PAT }}
+        path: helm
+
+
+    # ----------------------------------------------------------
+    # Update image tag inside Helm values.yaml
+    # ----------------------------------------------------------
+    - name: Update image tag
+      run: |
+        FILE="helm/saas/values.yaml"
+
+        sed -i "s/tag:.*/tag: \"${IMAGE_TAG}\"/" $FILE
+
+        echo "Updated values.yaml with tag: ${IMAGE_TAG}"
+        cat $FILE
+
+
+    # ----------------------------------------------------------
+    # Commit and push changes to Helm repo
+    # ----------------------------------------------------------
+    - name: Commit and push changes
+      run: |
+        cd helm
+        git config --global user.email "shresthasaksham08@gmail.com"
+        git config --global user.name "Saksham Shrestha"
+
+        git add .
+        git commit -m "Update image to tag ${IMAGE_TAG}"
+        git push
